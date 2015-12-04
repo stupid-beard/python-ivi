@@ -60,12 +60,12 @@ MeasurementAutoRangeMapping = {
         'four_wire_resistance': 'fres:range:auto'}
 
 MeasurementResolutionMapping = {
-        'dc_volts': 'volt:dc:resolution',
-        'ac_volts': 'volt:ac:resolution',
-        'dc_current': 'curr:dc:resolution',
-        'ac_current': 'curr:ac:resolution',
-        'two_wire_resistance': 'res:resolution',
-        'four_wire_resistance': 'fres:resolution'}
+        'dc_volts': 'volt:dc:digits',
+        'ac_volts': 'volt:ac:digits',
+        'dc_current': 'curr:dc:digits',
+        'ac_current': 'curr:ac:digits',
+        'two_wire_resistance': 'res:digits',
+        'four_wire_resistance': 'fres:digits'}
 
 class keithley2000(scpi.dmm.Base, scpi.dmm.MultiPoint, scpi.dmm.SoftwareTrigger):
     "Keithley 2000 IVI DMM driver"
@@ -87,6 +87,13 @@ class keithley2000(scpi.dmm.Base, scpi.dmm.MultiPoint, scpi.dmm.SoftwareTrigger)
         self._identity_specification_major_version = 4
         self._identity_specification_minor_version = 1
         self._identity_supported_instrument_models = ['2000', '2015']
+        
+        self._measurement_continuous = 'off'
+        self._add_property('measurement.continuous',
+                        self._get_measurement_continuous,
+                        self._set_measurement_continuous)
+        
+        self._set_cache_valid(False, 'measurement_function')
     
     def _initialize(self, resource = None, id_query = False, reset = False, **keywargs):
         "Opens an I/O session to the instrument."
@@ -108,3 +115,63 @@ class keithley2000(scpi.dmm.Base, scpi.dmm.MultiPoint, scpi.dmm.SoftwareTrigger)
         # reset
         if reset:
             self.utility.reset()
+    
+    def _get_measurement_function(self):
+        if not self._driver_operation_simulate and not self._get_cache_valid():
+            value = self._ask(":sense:function?").lower().strip('"')
+            value = [k for k,v in MeasurementFunctionMapping.items() if v==value][0]
+            self._measurement_function = value
+            self._set_cache_valid()
+        return self._measurement_function
+    
+    def _set_measurement_function(self, value):
+        if value not in MeasurementFunctionMapping:
+            raise ivi.ValueNotSupportedException()
+        if not self._driver_operation_simulate:
+            self._write(":sense:function '%s'" % MeasurementFunctionMapping[value])
+        self._measurement_function = value
+        self._set_cache_valid()
+        self._set_cache_valid(False, 'range')
+        self._set_cache_valid(False, 'auto_range')
+        self._set_cache_valid(False, 'resolution')
+
+    def _get_resolution(self):
+        if not self._driver_operation_simulate and not self._get_cache_valid():
+            func = self._get_measurement_function()
+            if func in MeasurementResolutionMapping:
+                cmd = MeasurementResolutionMapping[func]
+                value = float(self._ask("%s?" % (cmd)))
+                self._resolution = value
+                self._set_cache_valid()
+        return self._resolution
+    
+    def _set_resolution(self, value):
+        value = float(value)
+        # round up to even power of 10
+        value = math.pow(10, math.ceil(math.log10(value)))
+        if not self._driver_operation_simulate:
+            func = self._get_measurement_function()
+            if func in MeasurementResolutionMapping:
+                cmd = MeasurementResolutionMapping[func]
+                self._write("%s %g" % (cmd, value))
+        self._resolution = value
+        self._set_cache_valid()
+    
+    def _get_measurement_continuous(self):
+        if not self._driver_operation_simulate and not self._get_cache_valid():
+            value = self._ask(":init:cont?")
+            
+            self._measurement_continuous = value
+            self._set_cache_valid()
+        
+        return self._measurement_continuous
+    
+    def _set_measurement_continuous(self, value):
+        if value not in dmm.Auto2:
+            return ivi.ValueNotSupportedException
+        
+        if not self._driver_operation_simulate:
+            self._write(":init:cont %s" % value)
+        
+        self._measurement_continuous = value
+        self._set_cache_valid()
