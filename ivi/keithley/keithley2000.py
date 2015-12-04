@@ -31,6 +31,7 @@ from .. import ivi
 from .. import dmm
 from .. import scpi
 
+# FIXME: Add Temperature
 MeasurementFunctionMapping = {
         'dc_volts': 'volt:dc',
         'ac_volts': 'volt:ac',
@@ -59,13 +60,33 @@ MeasurementAutoRangeMapping = {
         'two_wire_resistance': 'res:range:auto',
         'four_wire_resistance': 'fres:range:auto'}
 
-MeasurementResolutionMapping = {
+MeasurementDigitsMapping = {
         'dc_volts': 'volt:dc:digits',
         'ac_volts': 'volt:ac:digits',
         'dc_current': 'curr:dc:digits',
         'ac_current': 'curr:ac:digits',
         'two_wire_resistance': 'res:digits',
         'four_wire_resistance': 'fres:digits'}
+
+MeasurementNPLCMapping = {
+        'dc_volts': 'volt:dc:nplc',
+        'ac_volts': 'volt:ac:nplc',
+        'dc_current': 'curr:dc:nplc',
+        'ac_current': 'curr:ac:nplc',
+        'two_wire_resistance': 'res:nplc',
+        'four_wire_resistance': 'fres:nplc'}
+
+MeasurementFilterMapping = {
+        'dc_volts': 'volt:dc:aver',
+        'ac_volts': 'volt:ac:aver',
+        'dc_current': 'curr:dc:aver',
+        'ac_current': 'curr:ac:aver',
+        'two_wire_resistance': 'res:aver',
+        'four_wire_resistance': 'fres:aver'}
+
+FilterTypeMapping = {
+    'moving_average': 'mov',
+    'repeat': 'rep'}
 
 class keithley2000(scpi.dmm.Base, scpi.dmm.MultiPoint, scpi.dmm.SoftwareTrigger):
     "Keithley 2000 IVI DMM driver"
@@ -93,7 +114,24 @@ class keithley2000(scpi.dmm.Base, scpi.dmm.MultiPoint, scpi.dmm.SoftwareTrigger)
                         self._get_measurement_continuous,
                         self._set_measurement_continuous)
         
-        self._set_cache_valid(False, 'measurement_function')
+        self._add_property('digits',
+                           self._get_digits,
+                           self._set_digits)
+        
+        self._add_property('nplc',
+                           self._get_nplc,
+                           self._set_nplc)
+        
+        # Filter
+        self._add_property('filter.enabled',
+                           self._get_filter_enabled,
+                           self._set_filter_enabled)
+        self._add_property('filter.type',
+                           self._get_filter_type,
+                           self._set_filter_type)
+        self._add_property('filter.count',
+                           self._get_filter_count,
+                           self._set_filter_count)
     
     def _initialize(self, resource = None, id_query = False, reset = False, **keywargs):
         "Opens an I/O session to the instrument."
@@ -133,33 +171,42 @@ class keithley2000(scpi.dmm.Base, scpi.dmm.MultiPoint, scpi.dmm.SoftwareTrigger)
         self._set_cache_valid()
         self._set_cache_valid(False, 'range')
         self._set_cache_valid(False, 'auto_range')
-        self._set_cache_valid(False, 'resolution')
+        self._set_cache_valid(False, 'digits')
+        self._set_cache_valid(False, 'nplc')
+        self._set_cache_valid(False, 'filter.enabled')
+        self._set_cache_valid(False, 'filter.type')
+        self._set_cache_valid(False, 'filter.count')
 
-    def _get_resolution(self):
+    def _get_digits(self):
         if not self._driver_operation_simulate and not self._get_cache_valid():
             func = self._get_measurement_function()
-            if func in MeasurementResolutionMapping:
-                cmd = MeasurementResolutionMapping[func]
-                value = float(self._ask("%s?" % (cmd)))
-                self._resolution = value
+            if func in MeasurementDigitsMapping:
+                cmd = MeasurementDigitsMapping[func]
+                value = int(self._ask("%s?" % (cmd)))
+                self._digits = value
                 self._set_cache_valid()
-        return self._resolution
+        return self._digits
     
-    def _set_resolution(self, value):
-        value = float(value)
-        # round up to even power of 10
-        value = math.pow(10, math.ceil(math.log10(value)))
+    def _set_digits(self, value):
+        value = int(value)
+        if value < 4 or value > 7:
+            raise ivi.ValueNotSupportedException
+        
         if not self._driver_operation_simulate:
             func = self._get_measurement_function()
-            if func in MeasurementResolutionMapping:
-                cmd = MeasurementResolutionMapping[func]
-                self._write("%s %g" % (cmd, value))
-        self._resolution = value
+            if func in MeasurementDigitsMapping:
+                cmd = MeasurementDigitsMapping[func]
+                self._write("%s %d" % (cmd, value))
+        self._digits = value
         self._set_cache_valid()
     
     def _get_measurement_continuous(self):
         if not self._driver_operation_simulate and not self._get_cache_valid():
-            value = self._ask(":init:cont?")
+            value = int(self._ask(":init:cont?"))
+            if value == 0:
+                value = 'off'
+            elif value == 1:
+                value = 'on'
             
             self._measurement_continuous = value
             self._set_cache_valid()
@@ -168,10 +215,107 @@ class keithley2000(scpi.dmm.Base, scpi.dmm.MultiPoint, scpi.dmm.SoftwareTrigger)
     
     def _set_measurement_continuous(self, value):
         if value not in dmm.Auto2:
-            return ivi.ValueNotSupportedException
+            raise ivi.ValueNotSupportedException
         
         if not self._driver_operation_simulate:
-            self._write(":init:cont %s" % value)
+            self._write(":init:cont %d" % (value == 'on'))
         
         self._measurement_continuous = value
+        self._set_cache_valid()
+
+    def _get_nplc(self):
+        if not self._driver_operation_simulate and not self._get_cache_valid():
+            func = self._get_measurement_function()
+            if func in MeasurementNPLCMapping:
+                cmd = MeasurementNPLCMapping[func]
+                value = float(self._ask("%s?" % (cmd)))
+                self._nplc = value
+                self._set_cache_valid()
+        return self._nplc
+    
+    def _set_nplc(self, value):
+        value = float(value)
+        if value < 0.01 or value > 10:
+            raise ivi.ValueNotSupportedException
+        
+        if not self._driver_operation_simulate:
+            func = self._get_measurement_function()
+            if func in MeasurementNPLCMapping:
+                cmd = MeasurementNPLCMapping[func]
+                self._write("%s %g" % (cmd, value))
+        self._nplc = value
+        self._set_cache_valid()
+    
+    # Filter
+    def _get_filter_enabled(self):
+        if not self._driver_operation_simulate and not self._get_cache_valid():
+            func = self._get_measurement_function()
+            if func in MeasurementFilterMapping:
+                cmd = MeasurementFilterMapping[func]
+                value = int(self._ask("%s:stat?" % (cmd)))
+                if value == 0:
+                    value = 'off'
+                elif value == 1:
+                    value = 'on'
+                    
+                self._filter_enabled = value
+                self._set_cache_valid()
+        return self._filter_enabled
+    
+    def _set_filter_enabled(self, value):
+        if value not in dmm.Auto2:
+            raise ivi.ValueNotSupportedException()
+        
+        if not self._driver_operation_simulate:
+            func = self._get_measurement_function()
+            if func in MeasurementFilterMapping:
+                cmd = MeasurementFilterMapping[func]
+                self._write("%s:stat %d" % (cmd, (value == 'on')))
+        self._filter_enabled = value
+        self._set_cache_valid()
+    
+    def _get_filter_count(self):
+        if not self._driver_operation_simulate and not self._get_cache_valid():
+            func = self._get_measurement_function()
+            if func in MeasurementFilterMapping:
+                cmd = MeasurementFilterMapping[func]
+                value = int(self._ask("%s:count?" % (cmd)))
+                self._filter_count = value
+                self._set_cache_valid()
+        return self._filter_count
+    
+    def _set_filter_count(self, value):
+        value = int(value)
+        if value < 1 or value > 100:
+            raise ivi.ValueNotSupportedException
+        
+        if not self._driver_operation_simulate:
+            func = self._get_measurement_function()
+            if func in MeasurementFilterMapping:
+                cmd = MeasurementFilterMapping[func]
+                self._write("%s:count %d" % (cmd, value))
+        self._filter_count = value
+        self._set_cache_valid()
+        
+    def _get_filter_type(self):
+        if not self._driver_operation_simulate and not self._get_cache_valid():
+            func = self._get_measurement_function()
+            if func in MeasurementFilterMapping:
+                cmd = MeasurementFilterMapping[func]
+                value = self._ask("%s:tcon?" % (cmd)).lower().strip('"')
+                value = [k for k,v in FilterTypeMapping.items() if v==value][0]
+                self._filter_type = value
+                self._set_cache_valid()
+        return self._filter_type
+    
+    def _set_filter_type(self, value):
+        if value not in FilterTypeMapping:
+            raise ivi.ValueNotSupportedException
+        
+        if not self._driver_operation_simulate:
+            func = self._get_measurement_function()
+            if func in MeasurementFilterMapping:
+                cmd = MeasurementFilterMapping[func]
+                self._write("%s:tcon %s" % (cmd, FilterTypeMapping[value]))
+        self._filter_type = value
         self._set_cache_valid()
